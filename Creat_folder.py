@@ -11,7 +11,6 @@ def create_today_folder():
     """创建当天日期文件夹"""
 
     today = datetime.now().strftime("%Y%m%d")
-
     folder = os.path.join(BASE_DIR, today)
 
     if not os.path.exists(folder):
@@ -40,6 +39,35 @@ def delete_if_empty(folder):
         print(f"文件夹有内容，保留：{folder}")
 
 
+def delete_old_empty_folders():
+    """程序启动时检查并删除历史空文件夹"""
+
+    if not os.path.exists(BASE_DIR):
+        return
+
+    today = datetime.now().strftime("%Y%m%d")
+
+    for name in os.listdir(BASE_DIR):
+
+        folder = os.path.join(BASE_DIR, name)
+
+        # 不是文件夹
+        if not os.path.isdir(folder):
+            continue
+
+        # 跳过今天
+        if name == today:
+            continue
+
+        # 只处理 yyyyMMdd 格式
+        if len(name) != 8 or not name.isdigit():
+            continue
+
+        if is_folder_empty(folder):
+            shutil.rmtree(folder)
+            print(f"启动检查：删除空文件夹：{folder}")
+
+
 def seconds_until_midnight():
     """计算距离明天0点还有多少秒"""
 
@@ -59,20 +87,25 @@ def seconds_until_midnight():
 
 def main():
 
+    # 创建根目录
     os.makedirs(BASE_DIR, exist_ok=True)
+
+    # 启动时先清理历史空文件夹
+    delete_old_empty_folders()
 
     while True:
 
+        # 创建今天文件夹
         today_folder = create_today_folder()
 
+        # 等待到明天0点
         wait_seconds = seconds_until_midnight()
 
-        print(
-            f"等待 {int(wait_seconds)} 秒后检查..."
-        )
+        print(f"等待 {int(wait_seconds)} 秒后检查...")
 
         time.sleep(wait_seconds)
 
+        # 检查今天文件夹是否为空
         delete_if_empty(today_folder)
 
 

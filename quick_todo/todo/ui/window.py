@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFrame,
 from ..domain import Task
 from ..service import TaskService
 from .editor import TaskEditor
+from .reminders import ReminderController, ReminderSettings
+from .scheduled_reminders import ScheduledRemindersDialog
 from .task_card import TaskCard
 
 
@@ -45,6 +47,8 @@ class MainWindow(QMainWindow):
         self.pin.setChecked(settings.value('pinned', False, type=bool))
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self.pin.isChecked())
         self.pin.toggled.connect(self.set_pinned)
+        self.reminders = ReminderController(service, settings, self)
+        self.reminders.popup.open_requested.connect(self.wake_for_capture)
         self.shortcuts = []
         for keys, callback in [('Ctrl+N', self.focus_capture), ('Ctrl+F', self.search.setFocus),
                                ('Ctrl+Return', self.new_details)]:
@@ -70,15 +74,15 @@ class MainWindow(QMainWindow):
         sidebar.setObjectName('sidebar')
         sidebar.setFixedWidth(178)
         side = QVBoxLayout(sidebar)
-        side.setContentsMargins(14, 26, 14, 18)
-        side.setSpacing(10)
+        side.setContentsMargins(14, 20, 14, 14)
+        side.setSpacing(6)
         brand = QLabel('轻记')
         brand.setObjectName('brand')
         side.addWidget(brand)
         tag = QLabel('随手记，慢慢完成')
         tag.setObjectName('muted')
         side.addWidget(tag)
-        side.addSpacing(28)
+        side.addSpacing(16)
         self.nav = {}
         for key, (label, _) in VIEWS.items():
             button = QPushButton(label)
@@ -90,7 +94,7 @@ class MainWindow(QMainWindow):
         side.addStretch()
         self.pin = QCheckBox('窗口置顶')
         side.addWidget(self.pin)
-        hint = QLabel('Ctrl + N  快速记录\nCtrl + F  搜索\nCtrl + Enter  详细新建')
+        hint = QLabel('Ctrl + N  快速记录\nCtrl + F  搜索\nCtrl + Enter  新建')
         hint.setObjectName('muted')
         side.addSpacing(12)
         self.hotkey_hint = QLabel('桌面快捷键未启用')
@@ -119,9 +123,22 @@ class MainWindow(QMainWindow):
         self.search.textChanged.connect(self.refresh)
         top.addWidget(self.search)
         main.addLayout(top)
+        heading_row = QHBoxLayout()
         self.heading = QLabel()
         self.heading.setObjectName('heading')
-        main.addWidget(self.heading)
+        heading_row.addWidget(self.heading)
+        heading_row.addStretch()
+        self.scheduled_button = QPushButton('定时提醒')
+        self.scheduled_button.setObjectName('reminderSettings')
+        self.scheduled_button.setToolTip('在指定时间提醒一件事，支持单次或每天重复')
+        self.scheduled_button.clicked.connect(self.edit_scheduled_reminders)
+        heading_row.addWidget(self.scheduled_button)
+        self.reminder_settings_button = QPushButton('提醒设置')
+        self.reminder_settings_button.setObjectName('reminderSettings')
+        self.reminder_settings_button.setToolTip('调整随机提醒间隔、显示时长，或关闭提醒')
+        self.reminder_settings_button.clicked.connect(self.edit_reminder_settings)
+        heading_row.addWidget(self.reminder_settings_button)
+        main.addLayout(heading_row)
         self.subtitle = QLabel()
         self.subtitle.setObjectName('muted')
         main.addWidget(self.subtitle)
@@ -176,6 +193,8 @@ class MainWindow(QMainWindow):
             self.status.setText('读取失败，请检查数据目录后重新打开。')
             return
         selected = self.service.select(tasks, self.view, self.search.text())
+        if not self.reminders.popup.is_scheduled and not any(not task.completed for task in tasks):
+            self.reminders.popup.dismiss()
         self.date_label.setText(date.today().strftime('%Y / %m / %d') + '  ·  ' +
                                 ('星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日')[date.today().weekday()])
         self.heading.setText(VIEWS[self.view][0])
@@ -338,11 +357,31 @@ class MainWindow(QMainWindow):
             self.day = date.today()
             self.refresh()
 
+    def edit_reminder_settings(self):
+        dialog = ReminderSettings(self.reminders, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.reminders.configure(*dialog.values())
+            self.status.setText('提醒设置已保存。')
+        dialog.deleteLater()
+
+    def edit_scheduled_reminders(self):
+        dialog = ScheduledRemindersDialog(self.service, self.reminders, self)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def preview_reminder(self):
+        self.reminders.show_now()
+        if not self.reminders.popup.isVisible():
+            self.status.setText('当前没有可提醒的待办；读取失败时请查看日志。')
+
     def setup_tray(self, icon):
         self.tray = QSystemTrayIcon(icon, self)
         self.tray.setToolTip('轻记 · 点击打开，随手记录')
         menu = QMenu(self)
         for text, callback in [('打开轻记', self.show_window), ('快速记录', self.focus_capture),
+                               ('提醒设置', self.edit_reminder_settings),
+                               ('定时提醒', self.edit_scheduled_reminders),
+                               ('立即提醒', self.preview_reminder),
                                ('退出', self.quit_app)]:
             action = QAction(text, menu)
             action.triggered.connect(callback)
@@ -367,6 +406,7 @@ class MainWindow(QMainWindow):
 
     def quit_app(self):
         self.quitting = True
+        self.reminders.stop()
         self.save_settings()
         if self.tray:
             self.tray.hide()
@@ -381,4 +421,5 @@ class MainWindow(QMainWindow):
                 self.tray.showMessage('轻记仍在运行', '点击托盘图标即可继续记录；右键菜单可以退出。')
                 self.settings.setValue('tray_hint_shown', True)
         else:
+            self.reminders.stop()
             event.accept()

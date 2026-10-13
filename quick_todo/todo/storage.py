@@ -4,7 +4,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import List
 
-from .domain import Task
+from .domain import Task, ScheduledReminder
 
 
 class SQLiteTaskRepository:
@@ -19,6 +19,13 @@ class SQLiteTaskRepository:
                     notes TEXT NOT NULL, due TEXT,
                     important INTEGER NOT NULL, completed INTEGER NOT NULL,
                     created_at TEXT NOT NULL
+                )
+            """)
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS scheduled_reminders (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL,
+                    next_at TEXT NOT NULL, daily INTEGER NOT NULL,
+                    enabled INTEGER NOT NULL
                 )
             """)
 
@@ -48,3 +55,22 @@ class SQLiteTaskRepository:
 
     def close(self) -> None:
         self.connection.close()
+
+    def all_reminders(self) -> List[ScheduledReminder]:
+        rows = self.connection.execute('SELECT * FROM scheduled_reminders').fetchall()
+        return [ScheduledReminder(r['id'], r['title'], datetime.fromisoformat(r['next_at']),
+                                  bool(r['daily']), bool(r['enabled'])) for r in rows]
+
+    def save_reminder(self, reminder: ScheduledReminder) -> None:
+        with self.connection:
+            self.connection.execute("""
+                INSERT INTO scheduled_reminders (id, title, next_at, daily, enabled)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET title=excluded.title,
+                    next_at=excluded.next_at, daily=excluded.daily, enabled=excluded.enabled
+            """, (reminder.id, reminder.title, reminder.next_at.isoformat(),
+                  int(reminder.daily), int(reminder.enabled)))
+
+    def delete_reminder(self, reminder_id: str) -> None:
+        with self.connection:
+            self.connection.execute('DELETE FROM scheduled_reminders WHERE id = ?', (reminder_id,))

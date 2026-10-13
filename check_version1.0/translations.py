@@ -1,0 +1,343 @@
+# -*- coding: utf-8 -*-
+"""读取 config/translations.ini；内置文案仅用于文件缺失或条目无效时回退。
+
+用户修改 INI 后重启生效，无需重新打包。启动时只读取一次。
+"""
+
+import configparser
+import json
+import sys
+from pathlib import Path
+from string import Formatter
+
+
+DEFAULT_TEXTS = {
+    "language_label": {
+        "zh": "语言 / Language",
+        "en": "语言 / Language",
+    },
+    "language_chinese": {
+        "zh": "中文",
+        "en": "中文",
+    },
+    "language_english": {
+        "zh": "English",
+        "en": "English",
+    },
+    "window_title": {
+        "zh": "版本校验工具",
+        "en": "Version verification tool",
+    },
+    "card_verification": {
+        "zh": "卡片校验",
+        "en": "Card verification",
+    },
+    "reader_connection": {
+        "zh": "读卡器连接",
+        "en": "Reader connection",
+    },
+    "reader_label": {
+        "zh": "读卡器：",
+        "en": "Reader:",
+    },
+    "reader_placeholder": {
+        "zh": "请刷新并选择读卡器",
+        "en": "Refresh and select a reader",
+    },
+    "refresh_readers": {
+        "zh": "刷新读卡器",
+        "en": "Refresh readers",
+    },
+    "verify_de": {
+        "zh": "校验 DE",
+        "en": "Verify DE",
+    },
+    "verify_cplc": {
+        "zh": "校验 CPLC",
+        "en": "Verify CPLC",
+    },
+    "cplc_hint": {
+        "zh": "比对 CPLC 数据值的前 6 个字节",
+        "en": "Compare the first 6 bytes of the CPLC value",
+    },
+    "de_hint": {
+        "zh": "按配置文件比对 DE 值",
+        "en": "Compare DE against the configured values",
+    },
+    "activity_log": {
+        "zh": "运行日志",
+        "en": "Activity log",
+    },
+    "clear_log": {
+        "zh": "清空日志",
+        "en": "Clear log",
+    },
+    "clear_log_hint": {
+        "zh": "清空当前显示的运行日志",
+        "en": "Clear the displayed log",
+    },
+    "status_ready": {
+        "zh": "等待校验",
+        "en": "Ready",
+    },
+    "status_passed": {
+        "zh": "校验成功",
+        "en": "Passed",
+    },
+    "status_failed": {
+        "zh": "校验失败",
+        "en": "Failed",
+    },
+    "no_response": {
+        "zh": "(无返回数据)",
+        "en": "(no data)",
+    },
+    "scanning_readers": {
+        "zh": "开始扫描读卡器...",
+        "en": "Scanning readers...",
+    },
+    "list_readers_failed": {
+        "zh": "获取读卡器失败：",
+        "en": "Could not list readers: ",
+    },
+    "no_readers": {
+        "zh": "未检测到读卡器。",
+        "en": "No readers detected.",
+    },
+    "readers_detected": {
+        "zh": "检测到 {count} 个读卡器：",
+        "en": "Detected {count} reader(s):",
+    },
+    "card_detected": {
+        "zh": "检测到卡片，ATR: ",
+        "en": "Card detected, ATR: ",
+    },
+    "connecting_reader": {
+        "zh": "选择读卡器：{reader}\n正在连接读卡器...",
+        "en": "Selected reader: {reader}\nConnecting...",
+    },
+    "reader_connected": {
+        "zh": "读卡器连接成功。",
+        "en": "Reader connected.",
+    },
+    "card_connection_failed": {
+        "zh": "读卡器已选择，但未能连接卡片：",
+        "en": "Reader selected, but card connection failed: ",
+    },
+    "verification_started": {
+        "zh": "开始校验 {kind}",
+        "en": "Starting {kind} verification",
+    },
+    "no_valid_reader": {
+        "zh": "未选择有效读卡器，请先刷新并选择读卡器。",
+        "en": "No valid reader selected. Refresh and select a reader first.",
+    },
+    "current_reader": {
+        "zh": "当前检测读卡器：{reader}",
+        "en": "Current reader: {reader}",
+    },
+    "initialize_card": {
+        "zh": "\n[1] 初始化卡片",
+        "en": "\n[1] Initialize card",
+    },
+    "initialize_failed": {
+        "zh": "初始化卡片失败，SW={status_word}",
+        "en": "Card initialization failed, SW={status_word}",
+    },
+    "read_card": {
+        "zh": "\n[2] 读取卡片 {kind}",
+        "en": "\n[2] Read {kind}",
+    },
+    "read_failed": {
+        "zh": "读取 {kind} 失败，SW={status_word}",
+        "en": "Failed to read {kind}, SW={status_word}",
+    },
+    "raw_response": {
+        "zh": "{kind} 原始返回数据：{raw_value}",
+        "en": "{kind} raw response: {raw_value}",
+    },
+    "card_value": {
+        "zh": "{kind} 数据值：{value}",
+        "en": "{kind} value: {value}",
+    },
+    "cplc_prefix": {
+        "zh": "CPLC 前 6 字节：{comparison_value}",
+        "en": "First 6 bytes of CPLC: {comparison_value}",
+    },
+    "load_settings": {
+        "zh": "\n[3] 读取校验配置",
+        "en": "\n[3] Load verification settings",
+    },
+    "cplc_format_rule": {
+        "zh": "应为 12 位十六进制",
+        "en": "expected 12 hexadecimal characters",
+    },
+    "de_format_rule": {
+        "zh": "应为偶数位十六进制",
+        "en": "expected an even number of hexadecimal characters",
+    },
+    "invalid_setting": {
+        "zh": "忽略无效配置 {key}（{rule}）",
+        "en": "Ignoring invalid setting {key} ({rule})",
+    },
+    "no_valid_values": {
+        "zh": "配置文件 [{section}] 中没有有效的 {kind} 校验值。",
+        "en": "No valid {kind} values configured in [{section}].",
+    },
+    "compare_card": {
+        "zh": "\n[4] 比对 {kind}",
+        "en": "\n[4] Compare {kind}",
+    },
+    "verification_passed": {
+        "zh": "{kind} 校验成功：{comparison_value}",
+        "en": "{kind} verification passed: {comparison_value}",
+    },
+    "verification_failed": {
+        "zh": "{kind} 校验失败：{comparison_value}",
+        "en": "{kind} verification failed: {comparison_value}",
+    },
+    "pcsc_8010000b": {
+        "zh": "读卡器正被其他程序占用。",
+        "en": "The reader is in use by another application.",
+    },
+    "pcsc_8010000c": {
+        "zh": "未检测到卡片。",
+        "en": "No card detected.",
+    },
+    "pcsc_80100010": {
+        "zh": "读卡器尚未就绪。",
+        "en": "The reader is not ready.",
+    },
+    "pcsc_80100017": {
+        "zh": "读卡器当前不可用。",
+        "en": "The reader is unavailable.",
+    },
+    "pcsc_8010001d": {
+        "zh": "智能卡服务未运行。",
+        "en": "The smart card service is not running.",
+    },
+    "pcsc_8010001e": {
+        "zh": "智能卡服务已停止。",
+        "en": "The smart card service has stopped.",
+    },
+    "pcsc_80100066": {
+        "zh": "卡片无响应。",
+        "en": "The card is not responding.",
+    },
+    "pcsc_80100067": {
+        "zh": "卡片未上电。",
+        "en": "The card is not powered on.",
+    },
+    "pcsc_80100068": {
+        "zh": "卡片已复位，请重新连接。",
+        "en": "The card was reset. Please reconnect.",
+    },
+    "pcsc_80100069": {
+        "zh": "未检测到卡片。",
+        "en": "No card detected.",
+    },
+    "communication_failed": {
+        "zh": "读卡器或卡片通信失败，请检查设备连接。",
+        "en": "Reader or card communication failed. Check the device connection.",
+    },
+    "pcsc_code": {
+        "zh": "（0x{code}）",
+        "en": " (0x{code})",
+    },
+    "cplc_invalid_hex": {
+        "zh": "CPLC 不是有效的十六进制数据。",
+        "en": "CPLC is not valid hexadecimal data.",
+    },
+    "cplc_invalid_size": {
+        "zh": "CPLC 数据应为 42 字节。",
+        "en": "CPLC data must contain 42 bytes.",
+    },
+    "cplc_invalid_length": {
+        "zh": "CPLC TLV 长度字段无效。",
+        "en": "Invalid CPLC TLV length field.",
+    },
+    "cplc_length_mismatch": {
+        "zh": "CPLC TLV 数据长度不匹配。",
+        "en": "CPLC TLV data length does not match.",
+    },
+    "apdu_length_failed": {
+        "zh": "无法根据 SW={status_word} 修正 APDU 长度。",
+        "en": "Cannot correct APDU length for SW={status_word}.",
+    },
+    "no_connected_card": {
+        "zh": "未检测到已连接的卡片，请插卡后重新选择读卡器。",
+        "en": "No connected card. Insert a card and select the reader again.",
+    },
+    "de_invalid_hex": {
+        "zh": "DE 值不是有效的十六进制数据。",
+        "en": "DE value is not valid hexadecimal data.",
+    },
+    "de_length_missing": {
+        "zh": "DE TLV 缺少长度字段。",
+        "en": "DE TLV length field is missing.",
+    },
+    "de_length_incomplete": {
+        "zh": "DE TLV 长度字段不完整。",
+        "en": "DE TLV length field is incomplete.",
+    },
+    "de_response_short": {
+        "zh": "DE TLV 返回长度不足。",
+        "en": "DE TLV response is shorter than declared.",
+    },
+    "config_missing": {
+        "zh": "版本配置文件不存在：{config_file}",
+        "en": "Configuration file not found: {config_file}",
+    },
+    "config_read_failed": {
+        "zh": "读取版本配置文件失败：{error}",
+        "en": "Could not read configuration file: {error}",
+    },
+}
+
+
+def translation_path():
+    """打包版始终读取 EXE 旁的 config，不依赖启动时的工作目录。"""
+    root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+    return root / "config" / "translations.ini"
+
+
+def _placeholders(value):
+    return {(field, spec, conversion)
+            for _, field, spec, conversion in Formatter().parse(value)
+            if field is not None}
+
+
+def load_texts(path=None):
+    """只覆盖格式正确的条目；缺失项、无效占位符使用原文案。"""
+    texts = {key: dict(entry) for key, entry in DEFAULT_TEXTS.items()}
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        with open(path if path is not None else translation_path(), encoding="utf-8-sig") as stream:
+            parser.read_file(stream)
+    except (OSError, UnicodeError, configparser.Error):
+        return texts
+    for key, entry in texts.items():
+        if not parser.has_section(key):
+            continue
+        for language in ("zh", "en"):
+            if not parser.has_option(key, language):
+                continue
+            try:
+                value = json.loads(parser.get(key, language))
+                if not isinstance(value, str) or not value.strip():
+                    continue
+                if _placeholders(value) != _placeholders(DEFAULT_TEXTS[key][language]):
+                    continue
+            except (ValueError, TypeError, configparser.Error):
+                continue
+            entry[language] = value
+    return texts
+
+
+TEXTS = load_texts()
+
+
+def translate(message_key, language="zh", **params):
+    """读取当前文案并填入动态内容；未知语言回退中文。"""
+    language = language if language in ("zh", "en") else "zh"
+    return TEXTS[message_key][language].format(**params)
